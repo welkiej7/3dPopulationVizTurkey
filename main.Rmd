@@ -1,0 +1,144 @@
+---
+title: "Population Density of Turkey"
+output: html_document
+date: "2023-08-19"
+---
+
+```{r setup, include=TRUE}
+knitr::opts_chunk$set(echo = TRUE)
+#Necessary Packages
+library(rgl)
+library(tidyverse)
+library(TRmaps)
+library(sf)
+library(rayshader)
+library(stars)
+library(rgl)
+
+# Graphic Options
+options(repr.plot.width = 24.0, repr.plot.height = 18.3)
+
+```
+
+## Aim of the Project
+
+  The aim of this project is to create a rendered 3D Turkey map that demonstrates the population density. This is a common visualization technique used to demonstrate the possible applications of the “rayshader” package. Above, we installed the necessary libraries. Nonetheless, since this project is written on Windows, it requires no additional 3rd party software. On the contrary, third-party software XQuartz is required for 3d visualization on macOS.  The most important concept we must understand in this visualization is the concept of polygon. 
+
+We use [Kontur Population Data](https://data.humdata.org/dataset/kontur-population-dataset) for the population density dataset in the hexagons and TRmaps package to find the intersection between Turkey’s population dataset and our maps. In the first chunk, we read our dataset since it is a “.gkps” file, we are going to read it with “st_read” function from “sf” package.
+
+
+```{r}
+st_read("C:\\Users\\onurt\\Downloads\\kontur_population_TR_20220630.gpkg") -> pop_data
+tr_ilce -> turkey
+ggplot(turkey) + geom_sf()
+```
+Now, we are using st_crs to bind both datasets to each other with the help of a standard format, “crs”. We can easily see the polygon types and test our map by creating two dots across the map. Although this is a sanity check, it is also useful for the future matrix we will use to create a matrix for 3d visualization.
+
+```{r}
+turkey <- turkey %>% st_transform(crs = st_crs(pop_data))
+st_turkey<- st_intersection(pop_data,turkey)
+ggplot(st_turkey) + geom_sf() ## bounded version graph.
+
+
+turkey_bbox <- st_bbox(st_turkey) # for future layers. 
+bleft <- st_point(c(turkey_bbox[['xmin']],turkey_bbox[['ymin']])) %>% 
+  st_sfc(crs = st_crs(pop_data))
+bright <- st_point(c(turkey_bbox[['xmax']],turkey_bbox[['ymin']]))%>%
+  st_sfc(crs = st_crs(pop_data))
+
+map_width = st_distance(bleft,bright) # width of the map
+map_height = st_distance(bleft, st_point(c(turkey_bbox[['xmin']], 
+                                           turkey_bbox[['ymax']])) %>%
+                           st_sfc(crs = st_crs(pop_data)))
+
+
+if(map_width > map_height){
+  w_ratio = 1 
+  h_ratio = map_height / map_width
+} else{
+  h_ratio = 1 
+  w_ratio = map_width/map_height
+}
+```
+In the next step, we are going to decide on the width and height ratio of the map to project it on a matrix. Increasing the size will increase the resolution of our map since $$\text{Number of Columns} == \text{size} \cdot \text{Width Ratio}  \land \text{Number of  Rows} = \text{size} \cdot \text{Height Ratio}$$
+We will raster the intersecting version of the two datasets and create a matrix from the population info. After this step, we only have to decide on shader specifications and visualization options.
+
+```{r}
+size = 500
+turkey_rasted <- st_rasterize(st_turkey, 
+                              nx = floor(size * w_ratio),
+                              ny = floor(size * h_ratio))
+
+
+rast_matrix_pop <- matrix(turkey_rasted$population,
+                          nrow = floor(size * w_ratio),
+                          ncol = floor(size * h_ratio))
+
+
+```
+Now we will use the rayshader package for visualization. All arguments are optional and can be altered according to one’s personal taste. I did use the light blue color since it is the general marketing color of Turkey that is used by many advertisements to represent “the cool and clean sea”.
+
+
+First the low quality, 3D image. 
+
+```{r}
+
+rgl::close3d()
+colors_map <- MetBrewer::met.brewer("Hokusai2",
+                                    direction = 1, 
+                                    type = "continuous")
+rast_matrix_pop%>%
+  height_shade(texture = grDevices::colorRampPalette(colors_map, bias = 4)(512))%>%
+  plot_3d(heightmap = rast_matrix_pop,
+          zscale = 600,
+          solid = TRUE,
+          triangulate = FALSE,
+          shadowdepth = 0,
+          shadow = TRUE,
+          shadow_darkness = 0.8,
+          lineantialias = TRUE,
+          windowsize = 600,
+          asp = 1, 
+          solidcolor = colors_map[5])
+
+render_camera(theta = 40, phi = 40, zoom = 0.8)
+
+
+```
+
+One important thing in here. If we are using the Solid == TRUE option, it is better to select a solid object color since it will affect how our 3d plot will look. I am sticking to the color palette in this scenario. Finally, I am rendering it highquality and saving the image. This may take a while depending on the machine that you are using, nonetheless, the general time frame is 5-10 minutes. 
+
+
+```{r}
+render_highquality("~/plot4.png",interactive = FALSE,
+                   samples = 400, width = 3000, height = 3000,
+                   lightaltitude = c(30,25),
+                   lightcolor = c(colors_map[2], "white"),
+                   lightintensity = c(370,500),
+                   lightdirection = c(80,98))
+```
+
+At the end, we are using the "magick" package to annotate. 
+
+```{r}
+library(magick)
+img <- image_read("~/plot4.png")
+img%>%image_annotate(text = "Republic of Türkiye: Population Density",
+                     gravity = 'southwest',
+                     size = 70,
+                     location = '+300+300',
+                     color = colors_map[6],
+                     weight = 50,
+                     font = 'Trebuchet',
+                     strokecolor = colors_map[3],
+                     style = "italic")%>%
+  image_annotate("Prepared by Onur Tuncay Bal | Data: Kontur - Türkiye: Population Density for 400m H3 Hexagons",
+                 size = 50, gravity = "southwest", location = '+250+250',
+                 color = colors_map[4], style = "italic", font = "Trebuchet", strokecolor = colors_map[2])%>%
+  image_write(path = "~/fin.png")
+
+knitr::include_graphics("~/fin.png")
+```
+
+
+
